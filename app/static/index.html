@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chunk Exporter</title>
+<link rel="stylesheet" href="/static/uPlot.min.css">
+<style>
+:root {
+  --bg:#14161a; --panel:#1c1f25; --panel2:#23272f; --line:#2f343d; --text:#d9dde3; --dim:#8b93a0;
+  --accent:#4f9cf9; --danger:#f0616d; --ok:#4ade80;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+  font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+button,input,select { font:inherit; color:inherit; background:var(--panel2); border:1px solid var(--line);
+  border-radius:5px; padding:4px 8px; }
+button { cursor:pointer; } button:hover { border-color:var(--accent); }
+button.primary { background:var(--accent); border-color:var(--accent); color:#04121f; font-weight:600; }
+button.icon { padding:2px 7px; }
+input[type=number] { width:78px; }
+input:focus,select:focus { outline:1px solid var(--accent); }
+.mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+.dim { color:var(--dim); }
+
+header { height:48px; display:flex; gap:8px; align-items:center; padding:0 12px; border-bottom:1px solid var(--line); background:var(--panel); }
+header input.folder { flex:1; min-width:200px; }
+#status { color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:30vw; }
+#status.err { color:var(--danger); }
+
+main { --w1:380px; --w3:340px; display:grid; grid-template-columns:var(--w1) 5px minmax(0,1fr) 5px var(--w3); height:calc(100vh - 48px); }
+.col { min-height:0; min-width:0; border-right:1px solid var(--line); display:flex; flex-direction:column; }
+.col:last-child { border-right:none; }
+.split { cursor:col-resize; background:var(--line); } .split:hover, .split.drag { background:var(--accent); }
+body.resizing { cursor:col-resize; user-select:none; } body.resizing video { pointer-events:none; }
+
+/* left */
+#videoBox { background:#000; aspect-ratio:16/9; position:relative; flex:none; }
+#videoBox video { width:100%; height:100%; display:block; }
+#noVideo { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--dim); }
+#transport { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:8px; border-bottom:1px solid var(--line); flex:none; }
+#tlabel { margin-left:auto; }
+.tabs { display:flex; border-bottom:1px solid var(--line); flex:none; }
+.tabs button { flex:1; border:none; border-radius:0; background:none; padding:7px; color:var(--dim); }
+.tabs button.on { color:var(--text); box-shadow:inset 0 -2px var(--accent); }
+.tabpane { flex:1; min-height:0; overflow:auto; padding:8px; display:none; }
+.tabpane.on { display:flex; flex-direction:column; gap:6px; }
+
+.chunk { display:grid; grid-template-columns:auto 1fr; gap:4px 8px; align-items:center; padding:6px; border:1px solid var(--line);
+  border-left-width:4px; border-radius:5px; background:var(--panel); }
+.chunk .row { display:flex; gap:4px; align-items:center; flex-wrap:wrap; grid-column:1 / -1; }
+.chunk b { min-width:62px; }
+.hint { color:var(--dim); font-size:12px; }
+#exportBar { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+#exportMsg { white-space:pre-wrap; }
+
+.colrow { display:grid; grid-template-columns:20px 1fr 1fr; gap:6px; align-items:center; }
+.colrow input[type=text] { width:100%; }
+.colrow.off { opacity:.45; }
+.colrow span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.plotbox { border:1px solid var(--line); border-radius:5px; background:var(--panel); padding:6px; display:flex; flex-direction:column; gap:4px; }
+.plotbox .row { display:flex; gap:4px; align-items:center; }
+.plotbox .sig { display:grid; grid-template-columns:22px 1fr auto 24px; gap:6px; align-items:center; }
+.plotbox input[type=color] { width:22px; height:22px; padding:0; border:none; background:none; }
+.plotbox .sig span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.plotbox .addrow input { flex:1; min-width:0; }
+
+/* middle */
+#times { flex:1; min-height:0; display:flex; flex-direction:column; padding:4px 8px 4px 4px; }
+.cell { flex:1; min-height:0; overflow:hidden; position:relative; }
+#viewBar { display:flex; gap:8px; align-items:center; padding:4px 10px; border-bottom:1px solid var(--line); flex:none; color:var(--dim); }
+.u-legend { font-size:12px; text-align:left; padding:0; }
+.u-legend .u-series { padding:1px 6px; }
+.u-legend .u-label, .u-legend .u-value { color:var(--text); }
+.layer { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+.shade { position:absolute; top:0; bottom:0; opacity:.22; }
+.shade.edge { opacity:.95; width:3px; }
+.playhead { position:absolute; top:0; bottom:0; width:0; border-left:2px solid #fff; }
+.u-cursor-pt { display:none !important; }
+.shade.sel { opacity:.34; }
+.chunk.sel { background:var(--panel2); box-shadow:0 0 0 1px var(--accent); }
+.u-select { background:rgba(79,156,249,.25) !important; }
+
+/* right */
+#xys { flex:1; min-height:0; display:flex; flex-direction:column; padding:6px; gap:6px; }
+.xycell { flex:1; min-height:0; position:relative; border:1px solid var(--line); border-radius:5px; background:var(--panel); }
+.xycell canvas { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
+.xytitle { position:absolute; left:8px; top:4px; color:var(--dim); font-size:12px; pointer-events:none; }
+</style>
+</head>
+<body>
+<header>
+  <b>Folder</b>
+  <input class="folder mono" id="folder" list="folderList" placeholder="/path/to/00005_… (contains clean.csv)" spellcheck="false">
+  <datalist id="folderList"></datalist>
+  <button id="browseBtn">Browse…</button>
+  <button class="primary" id="loadBtn">Load</button>
+  <span class="dim">video offset adj (s)</span>
+  <input type="number" id="adj" step="0.05" value="0" title="Added to the metadata-derived video offset">
+  <span id="status"></span>
+</header>
+
+<main>
+  <div class="col">
+    <div id="videoBox">
+      <video id="video" muted preload="auto" playsinline></video>
+      <div id="noVideo">no video</div>
+    </div>
+    <div id="transport">
+      <button id="playBtn" class="icon" title="Space">▶</button>
+      <button id="prevBtn" class="icon" title="Left arrow (Shift = 1 s)">◀|</button>
+      <button id="nextBtn" class="icon" title="Right arrow (Shift = 1 s)">|▶</button>
+      <select id="rate"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option></select>
+      <button id="inBtn" title="I">In</button>
+      <button id="outBtn" title="O – creates a chunk from In to here">Out</button>
+      <span id="tlabel" class="mono">t = 0.00 s</span>
+    </div>
+    <div class="tabs">
+      <button data-tab="chunks" class="on">Chunks</button>
+      <button data-tab="columns">Columns</button>
+      <button data-tab="plots">Plots</button>
+    </div>
+    <div class="tabpane on" id="tab-chunks">
+      <div class="hint">Drag on a time plot to create a chunk (click a chunk card to select it, then drag its edges); drag the white line/dot to scrub; click to move the cursor (and video). Wheel = zoom, Shift+wheel = pan. Keys: Space, ←/→, I/O, 0 = reset zoom.</div>
+      <div id="chunkList" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div id="exportBar">
+        <button id="addBtn">+ chunk from view</button>
+        <button id="sortBtn">Sort</button>
+        <button id="clearBtn">Clear</button>
+        <button id="exportBtn" class="primary" style="margin-left:auto">Export</button>
+      </div>
+      <div id="exportMsg" class="mono hint"></div>
+    </div>
+    <div class="tabpane" id="tab-plots">
+      <div class="hint">Each box is one time plot. Add any numeric column of clean.csv to a plot, pick its colour, or put it on a right-hand axis. Saved in this browser.</div>
+      <datalist id="numCols"></datalist>
+      <div id="plotList" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:6px"><button id="addPlotBtn">+ plot</button><button id="resetPlotsBtn">reset to default</button></div>
+    </div>
+    <div class="tabpane" id="tab-columns">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <input id="colFilter" placeholder="filter…" style="flex:1;min-width:80px">
+        <button id="colAll">keep shown</button>
+        <button id="colNone">drop shown</button>
+        <button id="colReset">reset names</button>
+      </div>
+      <div id="colCount" class="hint"></div>
+      <div id="colList" style="display:flex;flex-direction:column;gap:3px"></div>
+    </div>
+  </div>
+
+  <div class="split" data-var="--w1" data-dir="1"></div>
+  <div class="col">
+    <div id="viewBar"><span id="viewLabel" class="mono"></span><button id="resetView">Reset zoom</button></div>
+    <div id="times"></div>
+  </div>
+
+  <div class="split" data-var="--w3" data-dir="-1"></div>
+  <div class="col" style="border-right:none">
+    <div id="xys">
+      <div class="xycell" id="xy1"><canvas></canvas><div class="xytitle">x – y</div></div>
+      <div class="xycell" id="xy2"><canvas></canvas><div class="xytitle">ay – ax</div></div>
+    </div>
+  </div>
+</main>
+
+<script src="/static/uPlot.iife.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const CHUNK_COLORS = ['#4f9cf9','#f59e0b','#34d399','#f472b6','#a78bfa','#f87171','#22d3ee','#a3e635'];
+const AXIS = '#8b93a0', GRID = '#2a2f38';
+const FRAME = 1/30;
+
+const S = { folder:null, name:'', t:[], series:{}, columns:[], keep:{}, rename:{}, chunks:[], off:0, baseOff:0,
+            playhead:0, sel:-1, view:[0,1], hasVideo:false, markIn:null, playUntil:null, plots:[], xys:[], timer:null };
+
+// ---------- helpers ----------
+const fmt = v => v == null ? '--' : v.toFixed(3);
+function store(key, val) { try { val === undefined ? JSON.parse(localStorage.getItem(key)) : localStorage.setItem(key, JSON.stringify(val)); } catch {} }
+function load_(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
+function status(msg, err) { const s = $('#status'); s.textContent = msg; s.className = err ? 'err' : ''; s.title = msg; }
+function idxAt(t) {                      // nearest sample index
+  const a = S.t; let lo = 0, hi = a.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; a[m] <= t ? lo = m : hi = m; }
+  return Math.abs(a[lo] - t) <= Math.abs(a[hi] - t) ? lo : hi;
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+// ---------- loading ----------
+async function loadFolder(path) {
+  status('loading…');
+  const r = await fetch('/api/load?folder=' + encodeURIComponent(path));
+  const j = await r.json();
+  if (!r.ok) { status(j.error, true); return; }
+  Object.assign(S, { folder:j.folder, name:j.name, t:j.series.sim_time, series:j.series, columns:j.columns, numeric:j.numeric, baseOff:j.video_offset,
+                     hasVideo:j.has_video, markIn:null, playUntil:null, sel:-1 });
+  $('#folder').value = j.folder;
+  store('acp:last', j.folder);
+  const saved = load_('acp:' + j.folder) || {};
+  let srv = null;
+  try { srv = (await (await fetch('/api/chunks?folder=' + encodeURIComponent(j.folder))).json()).chunks; } catch {}
+  S.chunks = srv || saved.chunks || [];       // chunks.json wins; browser copy is only a fallback
+  try { S.cfg = await (await fetch('/api/config')).json(); } catch { S.cfg = {}; }
+  const dropped = new Set(S.cfg.dropped || []), ren = S.cfg.rename || {};
+  S.keep = {}; S.rename = {};
+  for (const c of S.columns) { S.keep[c] = !dropped.has(c); if (ren[c]) S.rename[c] = ren[c]; }
+  $('#adj').value = saved.adj ?? 0;
+  S.off = S.baseOff + +$('#adj').value;
+
+  const v = $('#video');
+  v.pause();
+  if (S.hasVideo) { v.src = '/api/video?folder=' + encodeURIComponent(j.folder); $('#noVideo').style.display = 'none'; v.style.visibility = 'visible'; }
+  else { v.removeAttribute('src'); v.load(); $('#noVideo').style.display = 'flex'; v.style.visibility = 'hidden'; }
+
+  await ensureSeries();
+  buildPlots();
+  renderChunks(); renderColumns(); renderPlotsTab();
+  S.playhead = S.t[0];
+  seek(S.playhead);
+  $('#exportMsg').textContent = '';
+  status(`${j.rows} rows · ${j.columns.length} columns · export → ${j.export_dir}`);
+}
+
+function persist() {
+  if (!S.folder) return;
+  store('acp:' + S.folder, { chunks:S.chunks, adj:+$('#adj').value });
+  clearTimeout(chunkTimer);
+  const folder = S.folder, chunks = S.chunks;
+  chunkTimer = setTimeout(async () => {
+    try {
+      const r = await fetch('/api/chunks', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ folder, chunks }) });
+      if (!r.ok) throw 0;
+    } catch { status('could not save chunks.json', true); }
+  }, 300);
+}
+let chunkTimer;
+
+// column mapping lives in config.json next to exported/ (shared by all folders); entries for
+// columns that this folder doesn't have are preserved
+let cfgTimer;
+function persistCols() {
+  clearTimeout(cfgTimer);
+  cfgTimer = setTimeout(async () => {
+    const here = new Set(S.columns), old = S.cfg || {};
+    const cfg = {
+      dropped:[...(old.dropped || []).filter(c => !here.has(c)), ...S.columns.filter(c => !S.keep[c])],
+      rename:{ ...Object.fromEntries(Object.entries(old.rename || {}).filter(([c]) => !here.has(c))), ...S.rename },
+    };
+    const r = await fetch('/api/config', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(cfg) });
+    if (r.ok) S.cfg = cfg; else status('could not save config.json', true);
+  }, 300);
+}
+
+// ---------- time plots ----------
+const DEFAULT_DEFS = [
+  { series:[['throttle_ctrl','throttle','#4ade80'],['brake_ctrl','brake','#f87171'],['delta_ctrl','steer','#60a5fa','y2']] },
+  { series:[['vx','vx','#fbbf24'],['vy','vy','#a78bfa']] },
+  { series:[['ax','ax','#f472b6'],['ay','ay','#22d3ee']] },
+  { series:[['psi_dot','psi_dot','#fb923c']] },
+];
+const SIG_COLORS = ['#4ade80','#f87171','#60a5fa','#fbbf24','#a78bfa','#f472b6','#22d3ee','#fb923c','#a3e635','#e879f9'];
+// defs are [column, label, colour, scale?] tuples; user edits are stored in localStorage
+let TIME_DEFS = load_('acp:plots') || JSON.parse(JSON.stringify(DEFAULT_DEFS));
+
+async function ensureSeries() {
+  const ok = new Set(S.numeric);
+  const need = [...new Set(TIME_DEFS.flatMap(d => d.series.map(s => s[0])))].filter(c => ok.has(c) && !S.series[c]);
+  if (!need.length) return;
+  const r = await fetch(`/api/series?folder=${encodeURIComponent(S.folder)}&cols=${encodeURIComponent(need.join(','))}`);
+  Object.assign(S.series, (await r.json()).series);
+}
+async function plotsChanged() {
+  store('acp:plots', TIME_DEFS);
+  const view = S.view.slice();
+  await ensureSeries();
+  buildPlots(); setView(view[0], view[1]); seek(S.playhead);
+  renderPlotsTab();
+}
+function renderPlotsTab() {
+  $('#numCols').innerHTML = (S.numeric || []).map(c => `<option value="${c}">`).join('');
+  const box = $('#plotList'); box.innerHTML = '';
+  TIME_DEFS.forEach((d, i) => {
+    const b = document.createElement('div'); b.className = 'plotbox';
+    const head = document.createElement('div'); head.className = 'row';
+    const t = document.createElement('b'); t.textContent = `Plot ${i + 1}`;
+    const del = document.createElement('button'); del.className = 'icon'; del.textContent = '✕'; del.title = 'delete plot'; del.style.marginLeft = 'auto';
+    del.onclick = () => { TIME_DEFS.splice(i, 1); plotsChanged(); };
+    head.append(t, del); b.appendChild(head);
+    d.series.forEach((s, k) => {
+      const row = document.createElement('div'); row.className = 'sig mono';
+      const col = document.createElement('input'); col.type = 'color'; col.value = s[2];
+      col.onchange = () => { s[2] = col.value; plotsChanged(); };
+      const nm = document.createElement('span'); nm.textContent = s[1] === s[0] ? s[0] : `${s[1]} (${s[0]})`; nm.title = s[0];
+      const y2 = document.createElement('label'); y2.className = 'dim'; y2.title = 'right-hand axis';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!s[3];
+      cb.onchange = () => { s[3] = cb.checked ? 'y2' : undefined; plotsChanged(); };
+      y2.append(cb, ' y2');
+      const rm = document.createElement('button'); rm.className = 'icon'; rm.textContent = '✕';
+      rm.onclick = () => { d.series.splice(k, 1); if (!d.series.length) TIME_DEFS.splice(i, 1); plotsChanged(); };
+      row.append(col, nm, y2, rm); b.appendChild(row);
+    });
+    const add = document.createElement('div'); add.className = 'row addrow';
+    const inp = document.createElement('input'); inp.setAttribute('list', 'numCols'); inp.placeholder = 'add signal…'; inp.spellcheck = false;
+    const go = () => {
+      const c = inp.value.trim();
+      if (!c) return;
+      if (!(S.numeric || []).includes(c)) { status(`"${c}" is not a numeric column of this folder`, true); return; }
+      d.series.push([c, c, SIG_COLORS[d.series.length % SIG_COLORS.length]]); plotsChanged();
+    };
+    inp.onchange = go; inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    add.appendChild(inp); b.appendChild(add); box.appendChild(b);
+  });
+}
+$('#addPlotBtn').onclick = () => { TIME_DEFS.push({ series:[] }); renderPlotsTab(); };
+$('#resetPlotsBtn').onclick = () => { TIME_DEFS = JSON.parse(JSON.stringify(DEFAULT_DEFS)); plotsChanged(); };
+
+function buildPlots() {
+  for (const p of S.plots) p.u.destroy();
+  S.plots = [];
+  const host = $('#times'); host.innerHTML = '';
+  for (const def of TIME_DEFS.filter(d => d.series.length)) {
+    const cell = document.createElement('div'); cell.className = 'cell'; host.appendChild(cell);
+    const hasY2 = def.series.some(s => s[3]);
+    const p = { cell, def };
+    const opts = {
+      width: cell.clientWidth, height: 100,
+      padding: [8, hasY2 ? 0 : 50, 0, 0],
+      scales: { x: { time:false } },
+      cursor: { sync:{ key:'ac', setSeries:false, filters:{ pub:t => t !== 'mousedown' && t !== 'mouseup' } }, drag:{ x:true, y:false, setScale:false } },
+      legend: { live:true },
+      axes: [
+        { stroke:AXIS, grid:{ stroke:GRID, width:1 }, ticks:{ stroke:GRID }, size:24 },
+        { stroke:AXIS, grid:{ stroke:GRID, width:1 }, ticks:{ stroke:GRID }, size:60 },
+        ...(hasY2 ? [{ scale:'y2', side:1, stroke:AXIS, grid:{ show:false }, ticks:{ stroke:GRID }, size:50 }] : []),
+      ],
+      series: [{ label:'t', value:(u, v) => v == null ? '--' : v.toFixed(2) + ' s' },
+        ...def.series.map(([key, label, color, scale]) => ({ label, stroke:color, width:1.4, scale:scale || 'y', value:(u, v) => fmt(v), spanGaps:false }))],
+      hooks: { setScale:[u => { if (p.layer) refreshLayer(p); }] },
+    };
+    const data = [S.t, ...def.series.map(s => S.series[s[0]] || S.t.map(() => null))];
+    p.u = new uPlot(opts, data, cell);
+    p.layer = document.createElement('div'); p.layer.className = 'layer'; p.u.over.appendChild(p.layer);
+    p.head = document.createElement('div'); p.head.className = 'playhead';
+    attachInteractions(p);
+    S.plots.push(p);
+  }
+  fitPlots();
+  setView(S.t[0], S.t[S.t.length - 1]);
+  buildXY();
+}
+
+function fitPlots() {
+  for (const p of S.plots) {
+    const fit = () => {
+      const w = p.cell.clientWidth, H = p.cell.clientHeight, lg = p.u.root.querySelector('.u-legend');
+      p.u.setSize({ width:w, height:Math.max(60, H - (lg ? lg.offsetHeight : 30) - 2) });
+    };
+    fit();
+    // setSize is applied asynchronously: re-measure once it has landed (e.g. legend wrapped to 2 rows)
+    requestAnimationFrame(() => {
+      const over = p.cell.clientHeight - p.u.root.offsetHeight;
+      if (over < 0 || over > 4) fit();
+    });
+  }
+  for (const x of S.xys) x.resize();
+}
+
+function refreshLayer(p) {
+  const u = p.u, L = p.layer;
+  L.replaceChildren();
+  const W = u.over.clientWidth;
+  S.chunks.forEach((c, i) => {
+    const a = clamp(u.valToPos(Math.min(c.start, c.end), 'x'), 0, W), b = clamp(u.valToPos(Math.max(c.start, c.end), 'x'), 0, W);
+    if (b - a < 0.5) return;
+    const d = document.createElement('div'); d.className = 'shade';
+    const col = CHUNK_COLORS[i % CHUNK_COLORS.length];
+    d.style.cssText = `left:${a}px;width:${b - a}px;background:${col}`;
+    if (i === S.sel) d.classList.add('sel');
+    L.appendChild(d);
+    if (i === S.sel) for (const x of [a, b]) {
+      const e = document.createElement('div'); e.className = 'shade edge';
+      e.style.cssText = `left:${x - 1.5}px;background:${col}`; L.appendChild(e);
+    }
+  });
+  L.appendChild(p.head);
+  placeHead(p);
+}
+function placeHead(p) {
+  const x = p.u.valToPos(S.playhead, 'x');
+  p.head.style.display = (x < 0 || x > p.u.over.clientWidth) ? 'none' : 'block';
+  p.head.style.left = x + 'px';
+}
+
+function attachInteractions(p) {
+  const over = p.u.over;
+  let down = null, drag = null;
+  const rect = () => over.getBoundingClientRect();
+  const localX = e => e.clientX - rect().left;
+  const inOver = e => { const r = rect(); return e.clientX >= r.left - 4 && e.clientX <= r.right + 4 && e.clientY >= r.top && e.clientY <= r.bottom; };
+  const tAt = e => clamp(p.u.posToVal(clamp(localX(e), 0, over.clientWidth), 'x'), S.t[0], S.t[S.t.length - 1]);
+  const hit = x => {                         // selected chunk edge first, then the playhead
+    const c = S.chunks[S.sel];
+    if (c) {
+      const dl = Math.abs(x - p.u.valToPos(Math.min(c.start, c.end), 'x')), dh = Math.abs(x - p.u.valToPos(Math.max(c.start, c.end), 'x'));
+      if (Math.min(dl, dh) <= 6) return { kind:'edge', key:((dl <= dh) === (c.start <= c.end)) ? 'start' : 'end' };
+    }
+    if (Math.abs(x - p.u.valToPos(S.playhead, 'x')) <= 6) return { kind:'head' };
+    return null;
+  };
+  p.cell.addEventListener('mousedown', e => {
+    if (e.button !== 0 || !inOver(e)) return;
+    const h = hit(localX(e));
+    if (!h) return;
+    e.stopPropagation(); e.preventDefault(); drag = h;
+  }, true);
+  over.addEventListener('mousedown', e => { if (e.button === 0) down = e.clientX; });
+  window.addEventListener('mousemove', e => {
+    if (drag) {
+      const t = tAt(e);
+      if (drag.kind === 'head') { if (S.playing) setPlaying(false); seek(t); }
+      else { S.chunks[S.sel][drag.key] = +t.toFixed(3); chunksChanged(); }
+      return;
+    }
+    if (inOver(e)) over.style.cursor = hit(localX(e)) ? 'ew-resize' : '';
+  });
+  window.addEventListener('mouseup', e => {
+    if (drag) { drag = null; return; }
+    if (down == null) return;
+    const x0 = down; down = null;
+    const r = rect(), xa = clamp(x0 - r.left, 0, r.width), xb = clamp(e.clientX - r.left, 0, r.width);
+    for (const q of S.plots) q.u.setSelect({ left:0, top:0, width:0, height:0 }, false);
+    if (Math.abs(e.clientX - x0) < 4) { seek(p.u.posToVal(xb, 'x')); return; }
+    addChunk(p.u.posToVal(Math.min(xa, xb), 'x'), p.u.posToVal(Math.max(xa, xb), 'x'));
+  });
+  over.addEventListener('wheel', e => {
+    e.preventDefault();
+    const [a, b] = S.view, span = b - a;
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      const d = span * 0.1 * Math.sign(e.deltaX || e.deltaY);
+      setView(a + d, b + d, true);
+    } else {
+      const rect = over.getBoundingClientRect();
+      const c = p.u.posToVal(e.clientX - rect.left, 'x'), k = e.deltaY > 0 ? 1.25 : 0.8;
+      setView(c - (c - a) * k, c + (b - c) * k);
+    }
+  }, { passive:false });
+}
+
+function setView(a, b, keepSpan) {
+  const lo = S.t[0], hi = S.t[S.t.length - 1];
+  let span = Math.max(0.2, b - a);
+  span = Math.min(span, hi - lo);
+  if (keepSpan) { a = clamp(a, lo, hi - span); } else { a = clamp(a, lo, hi - span); }
+  S.view = [a, a + span];
+  for (const p of S.plots) p.u.setScale('x', { min:S.view[0], max:S.view[1] });
+  $('#viewLabel').textContent = `view ${S.view[0].toFixed(2)} – ${S.view[1].toFixed(2)} s`;
+}
+
+// ---------- xy plots ----------
+class XY {
+  constructor(host, xs, ys) {
+    this.host = host; this.cv = host.querySelector('canvas'); this.xs = xs; this.ys = ys; this.idx = 0;
+    this.base = document.createElement('canvas');
+    const f = a => a.filter(Number.isFinite);
+    const fx = f(xs), fy = f(ys);
+    this.b = { x0:Math.min(...fx), x1:Math.max(...fx), y0:Math.min(...fy), y1:Math.max(...fy) };
+    this.cv.addEventListener('mousedown', e => {
+      const pos = this.pos(e), x = xs[this.idx], y = ys[this.idx];
+      const near = x != null && y != null && Math.hypot(this.sx(x) - pos.x, this.sy(y) - pos.y) < 14;
+      this.dragging = true;
+      this.pick(pos, !near);
+    });
+    window.addEventListener('mousemove', e => { if (this.dragging) this.pick(this.pos(e), false); });
+    window.addEventListener('mouseup', () => { this.dragging = false; });
+  }
+  pos(e) { const r = this.cv.getBoundingClientRect(); return { x:e.clientX - r.left, y:e.clientY - r.top }; }
+  // nearest sample to the mouse; while dragging only search near the current one so overlapping laps don't jump
+  pick(pos, global) {
+    const n = this.xs.length, lo = global ? 0 : Math.max(0, this.idx - 600), hi = global ? n - 1 : Math.min(n - 1, this.idx + 600);
+    let best = -1, bd = Infinity;
+    for (let i = lo; i <= hi; i++) {
+      if (this.xs[i] == null || this.ys[i] == null) continue;
+      const dx = this.sx(this.xs[i]) - pos.x, dy = this.sy(this.ys[i]) - pos.y, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = i; }
+    }
+    if (best >= 0) { if (S.playing) setPlaying(false); seek(S.t[best]); }
+  }
+  resize() {
+    const r = window.devicePixelRatio || 1, w = this.host.clientWidth, h = this.host.clientHeight;
+    this.w = w; this.h = h;
+    this.cv.width = this.base.width = Math.round(w * r); this.cv.height = this.base.height = Math.round(h * r);
+    this.r = r;
+    const m = this.m = { l:44, r:10, t:22, b:26 };
+    const b = this.b, pw = w - m.l - m.r, ph = h - m.t - m.b;
+    const k = this.k = Math.min(pw / ((b.x1 - b.x0) || 1), ph / ((b.y1 - b.y0) || 1));   // equal aspect
+    this.ox = m.l + (pw - k * (b.x1 - b.x0)) / 2; this.oy = m.t + ph - (ph - k * (b.y1 - b.y0)) / 2;
+    this.renderBase(); this.draw();
+  }
+  sx(v) { return this.ox + (v - this.b.x0) * this.k; }
+  sy(v) { return this.oy - (v - this.b.y0) * this.k; }
+  renderBase() {
+    const g = this.base.getContext('2d'), r = this.r, b = this.b, m = this.m;
+    g.setTransform(r, 0, 0, r, 0, 0); g.clearRect(0, 0, this.w, this.h);
+    g.font = '11px ui-monospace,Menlo,monospace'; g.fillStyle = AXIS; g.strokeStyle = GRID; g.lineWidth = 1;
+    const step = niceStep(Math.max(b.x1 - b.x0, b.y1 - b.y0) / 5);
+    g.textAlign = 'center';
+    for (let v = Math.ceil(b.x0 / step) * step; v <= b.x1; v += step) {
+      const x = Math.round(this.sx(v)) + .5; g.beginPath(); g.moveTo(x, m.t); g.lineTo(x, this.h - m.b); g.stroke(); g.fillText(+v.toPrecision(6), x, this.h - 10);
+    }
+    g.textAlign = 'right';
+    for (let v = Math.ceil(b.y0 / step) * step; v <= b.y1; v += step) {
+      const y = Math.round(this.sy(v)) + .5; g.beginPath(); g.moveTo(m.l, y); g.lineTo(this.w - m.r, y); g.stroke(); g.fillText(+v.toPrecision(6), m.l - 4, y + 4);
+    }
+    const path = (i0, i1, color, lw) => {
+      g.strokeStyle = color; g.lineWidth = lw; g.beginPath(); let pen = false;
+      for (let i = i0; i <= i1; i++) {
+        if (this.xs[i] == null || this.ys[i] == null) { pen = false; continue; }
+        pen ? g.lineTo(this.sx(this.xs[i]), this.sy(this.ys[i])) : g.moveTo(this.sx(this.xs[i]), this.sy(this.ys[i])); pen = true;
+      }
+      g.stroke();
+    };
+    path(0, this.xs.length - 1, '#4a515c', 1);
+    S.chunks.forEach((c, i) => path(idxAt(Math.min(c.start, c.end)), idxAt(Math.max(c.start, c.end)), CHUNK_COLORS[i % CHUNK_COLORS.length], i === S.sel ? 4.5 : 2.5));
+  }
+  draw() {
+    const g = this.cv.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, this.cv.width, this.cv.height); g.drawImage(this.base, 0, 0);
+    g.setTransform(this.r, 0, 0, this.r, 0, 0);
+    const x = this.xs[this.idx], y = this.ys[this.idx];
+    if (x == null || y == null) return;
+    g.beginPath(); g.arc(this.sx(x), this.sy(y), 5, 0, 7); g.fillStyle = '#fff'; g.fill(); g.strokeStyle = '#000'; g.lineWidth = 1.5; g.stroke();
+  }
+}
+function niceStep(r) { const p = 10 ** Math.floor(Math.log10(r)), f = r / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; }
+
+function buildXY() {
+  S.xys = [new XY($('#xy1'), S.series.x, S.series.y), new XY($('#xy2'), S.series.ay, S.series.ax)];
+  for (const x of S.xys) x.resize();
+}
+
+// ---------- playhead / video ----------
+const video = $('#video');
+function seek(t) {
+  t = clamp(t, S.t[0], S.t[S.t.length - 1]);
+  S.playhead = t;
+  if (S.hasVideo) { const vt = clamp(t + S.off, 0, video.duration || 1e9); if (Math.abs(video.currentTime - vt) > 1e-3) video.currentTime = vt; }
+  updateHead();
+}
+function updateHead() {
+  for (const p of S.plots) placeHead(p);
+  const i = idxAt(S.playhead);
+  for (const x of S.xys) { x.idx = i; x.draw(); }
+  $('#tlabel').textContent = `t = ${S.playhead.toFixed(2)} s`;
+}
+function setPlaying(on) {
+  clearInterval(S.timer); cancelAnimationFrame(S.raf);
+  $('#playBtn').textContent = on ? '⏸' : '▶';
+  if (!on) { if (S.hasVideo) video.pause(); S.playing = false; S.playUntil = null; return; }
+  S.playing = true;
+  const rate = +$('#rate').value;
+  let last = performance.now();
+  if (S.hasVideo) { video.playbackRate = rate; video.play(); }
+  const tick = now => {
+    if (!S.playing) return;
+    if (S.hasVideo) S.playhead = video.currentTime - S.off;
+    else { S.playhead += (now - last) / 1000 * rate; last = now; }
+    const end = S.t[S.t.length - 1];
+    if (S.playhead >= end || (S.playUntil != null && S.playhead >= S.playUntil)) { S.playhead = Math.min(S.playhead, S.playUntil ?? end); setPlaying(false); updateHead(); return; }
+    updateHead();
+    S.raf = requestAnimationFrame(tick);
+  };
+  S.raf = requestAnimationFrame(tick);
+}
+$('#playBtn').onclick = () => setPlaying(!S.playing);
+$('#rate').onchange = () => { if (S.hasVideo) video.playbackRate = +$('#rate').value; };
+$('#prevBtn').onclick = () => { setPlaying(false); seek(S.playhead - FRAME); };
+$('#nextBtn').onclick = () => { setPlaying(false); seek(S.playhead + FRAME); };
+video.addEventListener('seeked', () => { if (!S.playing) { /* keep plots in step with actual frame */ } });
+$('#adj').onchange = () => { S.off = S.baseOff + +$('#adj').value; persist(); seek(S.playhead); };
+$('#inBtn').onclick = () => { S.markIn = S.playhead; status(`In = ${S.markIn.toFixed(2)} s`); };
+$('#outBtn').onclick = () => {
+  if (S.markIn == null) { status('press In first', true); return; }
+  addChunk(Math.min(S.markIn, S.playhead), Math.max(S.markIn, S.playhead)); S.markIn = null;
+};
+
+// ---------- chunks ----------
+function addChunk(a, b) {
+  const lo = S.t[0], hi = S.t[S.t.length - 1];
+  S.chunks.push({ start:+clamp(a, lo, hi).toFixed(3), end:+clamp(b, lo, hi).toFixed(3) });
+  S.sel = S.chunks.length - 1;
+  chunksChanged();
+}
+function chunksChanged() { persist(); renderChunks(); for (const p of S.plots) refreshLayer(p); for (const x of S.xys) { x.renderBase(); x.draw(); } }
+
+function selectChunk(i) {
+  if (S.sel === i) return;
+  S.sel = i;
+  document.querySelectorAll('.chunk').forEach((el, k) => el.classList.toggle('sel', k === i));
+  for (const p of S.plots) refreshLayer(p);
+  for (const x of S.xys) { x.renderBase(); x.draw(); }
+}
+
+function renderChunks() {
+  const box = $('#chunkList'); box.innerHTML = '';
+  if (!S.chunks.length) { box.innerHTML = '<div class="dim">No chunks yet.</div>'; return; }
+  S.chunks.forEach((c, i) => {
+    const d = document.createElement('div'); d.className = 'chunk'; d.style.borderLeftColor = CHUNK_COLORS[i % CHUNK_COLORS.length];
+    if (i === S.sel) d.classList.add('sel');
+    d.onclick = () => selectChunk(i);
+    const num = (key) => {
+      const inp = document.createElement('input'); inp.type = 'number'; inp.step = '0.01'; inp.value = c[key].toFixed(2);
+      inp.onchange = () => { c[key] = +inp.value; chunksChanged(); }; return inp;
+    };
+    const btn = (txt, title, fn) => { const b = document.createElement('button'); b.className = 'icon'; b.textContent = txt; b.title = title; b.onclick = fn; return b; };
+    const row1 = document.createElement('div'); row1.className = 'row';
+    const name = document.createElement('b'); name.className = 'mono'; name.textContent = `c${i + 1}`;
+    const dur = document.createElement('span'); dur.className = 'dim mono'; dur.textContent = `${Math.abs(c.end - c.start).toFixed(2)} s`;
+    row1.append(name, dur,
+      btn('▶', 'play this chunk', () => { setPlaying(false); seek(Math.min(c.start, c.end)); S.playUntil = Math.max(c.start, c.end); setPlaying(true); S.playUntil = Math.max(c.start, c.end); }),
+      btn('✕', 'delete', e => { e.stopPropagation(); S.chunks.splice(i, 1); S.sel = S.sel === i ? -1 : S.sel > i ? S.sel - 1 : S.sel; chunksChanged(); }));
+    const row2 = document.createElement('div'); row2.className = 'row';
+    row2.append(btn('⇤', 'set start to cursor', () => { c.start = +S.playhead.toFixed(3); chunksChanged(); }), num('start'), num('end'),
+      btn('⇥', 'set end to cursor', () => { c.end = +S.playhead.toFixed(3); chunksChanged(); }));
+    d.append(row1, row2); box.appendChild(d);
+  });
+}
+$('#addBtn').onclick = () => addChunk(S.view[0], S.view[1]);
+$('#sortBtn').onclick = () => { S.chunks.sort((a, b) => Math.min(a.start, a.end) - Math.min(b.start, b.end)); S.sel = -1; chunksChanged(); };
+$('#clearBtn').onclick = () => { if (S.chunks.length && confirm('Remove all chunks?')) { S.chunks = []; S.sel = -1; chunksChanged(); } };
+
+// ---------- columns ----------
+function renderColumns() {
+  const box = $('#colList'); box.innerHTML = '';
+  const q = $('#colFilter').value.trim().toLowerCase();
+  let n = 0;
+  for (const c of S.columns) {
+    if (S.keep[c]) n++;
+    if (q && !c.toLowerCase().includes(q)) continue;
+    const row = document.createElement('label'); row.className = 'colrow mono' + (S.keep[c] ? '' : ' off');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = S.keep[c];
+    cb.onchange = () => { S.keep[c] = cb.checked; row.classList.toggle('off', !cb.checked); persistCols(); countCols(); };
+    const nm = document.createElement('span'); nm.textContent = c; nm.title = c;
+    const rn = document.createElement('input'); rn.type = 'text'; rn.placeholder = c; rn.value = S.rename[c] || '';
+    rn.onchange = () => { rn.value = rn.value.trim(); if (rn.value) S.rename[c] = rn.value; else delete S.rename[c]; persistCols(); };
+    row.append(cb, nm, rn); box.appendChild(row);
+  }
+  countCols();
+}
+function countCols() { $('#colCount').textContent = `${S.columns.filter(c => S.keep[c]).length} / ${S.columns.length} columns kept`; }
+const shown = () => { const q = $('#colFilter').value.trim().toLowerCase(); return S.columns.filter(c => !q || c.toLowerCase().includes(q)); };
+$('#colFilter').oninput = renderColumns;
+$('#colAll').onclick = () => { shown().forEach(c => S.keep[c] = true); persistCols(); renderColumns(); };
+$('#colNone').onclick = () => { shown().forEach(c => S.keep[c] = false); persistCols(); renderColumns(); };
+$('#colReset').onclick = () => { S.rename = {}; persistCols(); renderColumns(); };
+
+// ---------- export ----------
+$('#exportBtn').onclick = async () => {
+  const columns = S.columns.filter(c => S.keep[c]).map(c => ({ name:c, rename:S.rename[c] || '' }));
+  const msg = $('#exportMsg');
+  const r = await fetch('/api/export', { method:'POST', headers:{ 'Content-Type':'application/json' },
+    body:JSON.stringify({ folder:S.folder, columns, chunks:S.chunks }) });
+  const j = await r.json();
+  if (!r.ok) { msg.style.color = 'var(--danger)'; msg.textContent = j.error; return; }
+  msg.style.color = 'var(--ok)';
+  msg.textContent = `Wrote to ${j.dir}\n` + j.written.map(w => `${w.file}  (${w.rows} rows)`).join('\n');
+};
+
+// ---------- tabs, keys, resize ----------
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.tabpane').forEach(x => x.classList.toggle('on', x.id === 'tab-' + b.dataset.tab));
+});
+$('#resetView').onclick = () => S.t.length && setView(S.t[0], S.t[S.t.length - 1]);
+window.addEventListener('keydown', e => {
+  if (e.target.matches('input,select,textarea') || !S.t.length) return;
+  const step = e.shiftKey ? 1 : FRAME;
+  if (e.key === ' ') { e.preventDefault(); setPlaying(!S.playing); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); setPlaying(false); seek(S.playhead - step); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); setPlaying(false); seek(S.playhead + step); }
+  else if (e.key === 'i') $('#inBtn').click();
+  else if (e.key === 'o') $('#outBtn').click();
+  else if (e.key === '0') $('#resetView').click();
+});
+new ResizeObserver(() => { if (S.plots.length) fitPlots(); }).observe($('#times'));
+window.addEventListener('resize', () => { for (const x of S.xys) x.resize(); });
+new ResizeObserver(() => { for (const x of S.xys) x.resize(); }).observe($('#xys'));
+
+document.querySelectorAll('.split').forEach(sp => {
+  const v = sp.dataset.var, dir = +sp.dataset.dir, main = $('main');
+  const saved = load_('acp:' + v); if (saved) main.style.setProperty(v, saved + 'px');
+  sp.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const x0 = e.clientX, w0 = (dir > 0 ? sp.previousElementSibling : sp.nextElementSibling).getBoundingClientRect().width;
+    sp.classList.add('drag'); document.body.classList.add('resizing');
+    const move = ev => {
+      const w = clamp(w0 + dir * (ev.clientX - x0), 220, window.innerWidth * 0.6);
+      main.style.setProperty(v, w + 'px'); store('acp:' + v, Math.round(w));
+    };
+    const up = () => { sp.classList.remove('drag'); document.body.classList.remove('resizing'); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  });
+});
+
+$('#browseBtn').onclick = async () => {
+  status('choose a folder in the dialog…');
+  const j = await (await fetch('/api/browse?start=' + encodeURIComponent($('#folder').value))).json();
+  if (j.error) { status(j.error, true); return; }
+  if (!j.path) { status('browse cancelled'); return; }
+  $('#folder').value = j.path; loadFolder(j.path);
+};
+$('#loadBtn').onclick = () => loadFolder($('#folder').value.trim());
+$('#folder').addEventListener('keydown', e => { if (e.key === 'Enter') $('#loadBtn').click(); });
+
+(async function init() {
+  const r = await fetch('/api/folders'); const j = await r.json();
+  $('#folderList').innerHTML = j.folders.map(f => `<option value="${f}">`).join('');
+  const last = load_('acp:last');
+  const start = (last && j.folders.includes(last)) ? last : j.folders[0];
+  if (start) { $('#folder').value = start; loadFolder(start); } else status('no folders with clean.csv found under ' + j.root, true);
+})();
+</script>
+</body>
+</html>
