@@ -93,7 +93,12 @@ body.resizing { cursor:col-resize; user-select:none; } body.resizing video { poi
 <header>
   <button class="primary" id="openBtn" title="Pick the folder that contains the log folders (each with a clean.csv)">Open logs folder…</button>
   <button id="reopenBtn" style="display:none"></button>
+  <input type="file" id="dirInput" webkitdirectory multiple hidden>
   <select id="folderSel" class="mono" style="flex:1;min-width:200px"></select>
+  <span id="fbBar" style="display:none;gap:6px;align-items:center">
+    <button id="dlChunks" title="Browser mode cannot write files: download to keep a copy next to your logs">⬇ chunks.json</button>
+    <button id="dlConfig" title="Column drop/rename mapping">⬇ config.json</button>
+  </span>
   <span class="dim">video offset adj (s)</span>
   <input type="number" id="adj" step="0.05" value="0" title="Added to the metadata-derived video offset">
   <span id="status"></span>
@@ -198,6 +203,39 @@ const idb = (mode, fn) => new Promise((res, rej) => {
 const idbGet = k => idb('readonly', st => st.get(k)).catch(() => null);
 const idbSet = (k, v) => idb('readwrite', st => st.put(v, k)).catch(() => {});
 
+// Browsers without showDirectoryPicker (Firefox, Safari): <input webkitdirectory> gives read-only access,
+// wrapped here in objects that look like the directory handles used below.
+class VDir {
+  constructor(name, node) { this.name = name; this.node = node; this.kind = 'directory'; }
+  async getFileHandle(n) {
+    const f = this.node.files.get(n);
+    if (!f) throw new DOMException(n, 'NotFoundError');
+    return { kind:'file', name:n, getFile:async () => f };
+  }
+  async *entries() {
+    for (const [n, f] of this.node.files) yield [n, { kind:'file', name:n, getFile:async () => f }];
+    for (const [n, d] of this.node.dirs) yield [n, new VDir(n, d)];
+  }
+}
+function vdirFromFiles(files) {
+  const mk = () => ({ files:new Map(), dirs:new Map() }), root = mk();
+  let rootName = '';
+  for (const f of files) {
+    const parts = f.webkitRelativePath.split('/');
+    rootName = parts[0];
+    if (parts.length > 3) continue;                       // only root/<log folder>/<file> matters
+    let node = root;
+    for (const d of parts.slice(1, -1)) { if (!node.dirs.has(d)) node.dirs.set(d, mk()); node = node.dirs.get(d); }
+    node.files.set(parts[parts.length - 1], f);
+  }
+  return new VDir(rootName, root);
+}
+function download(name, data, type) {
+  const a = document.createElement('a'), url = URL.createObjectURL(new Blob([data], { type }));
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 async function readJSON(dir, name, fallback) {
   try { return JSON.parse(await (await (await dir.getFileHandle(name)).getFile()).text()); } catch { return fallback; }
 }
@@ -205,15 +243,30 @@ async function writeText(dir, name, text) {
   const w = await (await dir.getFileHandle(name, { create:true })).createWritable();
   await w.write(text); await w.close();
 }
+// chunks.json / config.json: written to the logs folder, or (browser mode) kept in localStorage
+// and downloadable; when reading in browser mode the newer of file and localStorage wins
+async function readState(name, fallback) {
+  let best = { t:-1, v:fallback };
+  try { const f = await (await S.root.getFileHandle(name)).getFile(); best = { t:f.lastModified, v:JSON.parse(await f.text()) }; } catch {}
+  if (!hasFS) try { const o = JSON.parse(localStorage.getItem('acp:fb:' + name)); if (o && o.t > best.t) best = { t:o.t, v:JSON.parse(o.text) }; } catch {}
+  return best.v;
+}
+async function saveState(name, text) {
+  if (hasFS) return writeText(S.root, name, text);
+  localStorage.setItem('acp:fb:' + name, JSON.stringify({ t:Date.now(), text }));
+}
+const chunksText = () => JSON.stringify(Object.fromEntries(Object.entries(S.allChunks).sort()), null, 1) + '\n';
+const cfgText = () => JSON.stringify(S.cfg, null, 2) + '\n';
 
 async function openRoot(handle) {
   S.root = handle; S.dirs = {};
   const hasClean = async d => { try { await d.getFileHandle('clean.csv'); return true; } catch { return false; } };
   if (await hasClean(handle)) S.dirs[handle.name] = handle;
   for await (const [name, h] of handle.entries()) if (h.kind === 'directory' && await hasClean(h)) S.dirs[name] = h;
-  S.cfg = await readJSON(handle, 'config.json', {});
-  S.allChunks = await readJSON(handle, 'chunks.json', {});
-  idbSet('root', handle);
+  S.cfg = await readState('config.json', {});
+  S.allChunks = await readState('chunks.json', {});
+  if (hasFS) idbSet('root', handle);
+  $('#fbBar').style.display = hasFS ? 'none' : 'flex';
   $('#reopenBtn').style.display = 'none';
   const names = Object.keys(S.dirs).sort();
   $('#folderSel').innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('');
@@ -277,7 +330,7 @@ async function loadFolder(name) {
   S.playhead = S.t[0];
   seek(S.playhead);
   $('#exportMsg').textContent = '';
-  status(`${df.n} rows · ${df.columns.length} columns · export → ${S.root.name}/exported/${name}`);
+  status(`${df.n} rows · ${df.columns.length} columns · ` + (hasFS ? `export → ${S.root.name}/exported/${name}` : 'browser mode: export downloads a .zip'));
 }
 
 let chunkTimer;
@@ -287,7 +340,7 @@ function persist() {
   S.allChunks[S.folder] = S.chunks.map(c => ({ start:c.start, end:c.end }));
   clearTimeout(chunkTimer);
   chunkTimer = setTimeout(async () => {
-    try { await writeText(S.root, 'chunks.json', JSON.stringify(Object.fromEntries(Object.entries(S.allChunks).sort()), null, 1) + '\n'); }
+    try { await saveState('chunks.json', chunksText()); }
     catch (e) { status('could not save chunks.json: ' + e.message, true); }
   }, 300);
 }
@@ -303,7 +356,7 @@ function persistCols() {
       dropped:[...(old.dropped || []).filter(c => !here.has(c)), ...S.columns.filter(c => !S.keep[c])].sort(),
       rename:{ ...Object.fromEntries(Object.entries(old.rename || {}).filter(([c]) => !here.has(c))), ...S.rename },
     };
-    try { await writeText(S.root, 'config.json', JSON.stringify(cfg, null, 2) + '\n'); S.cfg = cfg; }
+    try { S.cfg = cfg; await saveState('config.json', cfgText()); }
     catch (e) { status('could not save config.json: ' + e.message, true); }
   }, 300);
 }
@@ -715,6 +768,13 @@ $('#exportBtn').onclick = async () => {
   const fail = t => { msg.style.color = 'var(--danger)'; msg.textContent = t; };
   try {
     const files = Core.exportChunks(S.df, columns, S.chunks);
+    if (!hasFS) {
+      const zip = Core.makeZip(files.map((f, i) => ({ name:`${S.folder}/c${i + 1}_${S.folder}.csv`, text:f.text })));
+      download(`${S.folder}_chunks.zip`, zip, 'application/zip');
+      msg.style.color = 'var(--ok)';
+      msg.textContent = `Downloaded ${S.folder}_chunks.zip — unzip it into your exported/ folder:\n` + files.map((f, i) => `${S.folder}/c${i + 1}_${S.folder}.csv  (${f.rows} rows)`).join('\n');
+      return;
+    }
     const out = await (await S.root.getDirectoryHandle('exported', { create:true })).getDirectoryHandle(S.folder, { create:true });
     const stale = new RegExp(`^(chunk_\\d+|c\\d+_${S.folder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\.csv$`);
     for await (const [n, h] of out.entries()) if (h.kind === 'file' && stale.test(n)) await out.removeEntry(n);   // drop stale chunks
@@ -765,11 +825,17 @@ document.querySelectorAll('.split').forEach(sp => {
   });
 });
 
-$('#openBtn').onclick = pickRoot;
+$('#openBtn').onclick = hasFS ? pickRoot : () => $('#dirInput').click();
+$('#dirInput').onchange = async e => {
+  const files = [...e.target.files]; e.target.value = '';
+  if (files.length) await openRoot(vdirFromFiles(files));
+};
+$('#dlChunks').onclick = () => download('chunks.json', chunksText(), 'application/json');
+$('#dlConfig').onclick = () => download('config.json', cfgText(), 'application/json');
 $('#folderSel').onchange = () => loadFolder($('#folderSel').value);
 
 (async function init() {
-  if (!hasFS) { status('This app needs the File System Access API: use Chrome or Edge.', true); $('#openBtn').disabled = true; return; }
+  if (!hasFS) { status('Browser mode (no direct file access): pick your logs folder. Edits are kept in this browser; download chunks.json / config.json to keep copies.'); return; }
   const h = await idbGet('root');
   if (!h) { status('Open the folder that contains your log folders'); return; }
   if (await h.queryPermission({ mode:'readwrite' }) === 'granted') { openRoot(h); return; }
