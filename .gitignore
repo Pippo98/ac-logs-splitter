@@ -1,0 +1,10 @@
+exported/
+*.json
+*.zip
+*.csv
+*.mp4
+*.log
+
+__pycache__/
+
+.DS_Store
